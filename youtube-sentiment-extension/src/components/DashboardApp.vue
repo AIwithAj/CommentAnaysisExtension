@@ -2,15 +2,15 @@
   <div class="dashboard-container">
     <!-- Header -->
     <div class="dashboard-header slide-in-up">
-  
+
 
       <h1 class="dashboard-title flex items-center justify-center gap-2">
         <i data-feather="trending-up"></i>
         YouTube Sentiment Analysis Pro
       </h1>
-          <div v-if="videoTitle" class="video-title text-center text-xl font-semibold mt-4">
-  🎬 {{ videoTitle }}
-</div>
+      <div v-if="videoTitle" class="video-title text-center text-xl font-semibold mt-4">
+        🎬 {{ videoTitle }}
+      </div>
       <p class="dashboard-subtitle">
         Advanced AI-powered comment analysis with real-time insights
       </p>
@@ -22,12 +22,14 @@
 
     <!-- URL Input & Launch Button -->
     <div v-if="!analysisData && !autoDetected" class="url-input-section glass-card">
-      <input 
-        v-model="youtubeUrl" 
-        type="text" 
-        placeholder="Paste YouTube video URL here..." 
-        class="url-input"
-      />
+      <input v-model="youtubeUrl" type="text" placeholder="Paste YouTube video URL here..." class="url-input" />
+      <div class="toggle-wrapper">
+        <label class="toggle-label">
+          <input type="checkbox" v-model="quizo" />
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">Enable Quiz Mode</span>
+        </label>
+      </div>
       <div class="button-group">
         <button class="btn btn-launch" @click="handleLaunch">
           <i data-feather="play"></i>
@@ -42,10 +44,7 @@
 
     <!-- Charts Section -->
     <div v-if="analysisData" class="space-y-6">
-      <MetricsCards 
-        :metrics="analysisData.metrics"
-        :sentiment="analysisData.sentiment_distribution"
-      />
+      <MetricsCards :metrics="analysisData.metrics" :sentiment="analysisData.sentiment_distribution" />
       <SentimentChart :sentiment-data="analysisData.sentiment_distribution" />
       <SentimentGaugeChart :sentiment-score="analysisData.metrics.sentiment_score" />
       <TrendChart :trend-data="analysisData.trend_data" />
@@ -101,7 +100,8 @@ export default {
       analysisData: null,
       youtubeUrl: '',
       autoDetected: false,
-      videoTitle: ''
+      videoTitle: '',
+      quizo: false
     };
   },
   async mounted() {
@@ -130,17 +130,63 @@ export default {
       const match = url.match(/^https:\/\/(?:www\.)?youtube\.com\/watch\?v=([\w-]{11})/);
       return match ? match[1] : null;
     },
-
     async handleLaunch() {
-      const videoId = this.extractVideoId(this.youtubeUrl);
-      if (!videoId) {
-        this.error = 'Invalid YouTube URL';
-        this.demoMode = true;
-        await this.loadDemoData();
-        return;
+      this.loading = true;
+      this.error = null;
+      this.analysisData = null;
+
+      try {
+        if (this.quizo) {
+          this.loadingMessage = 'Analyzing quiz feedback...';
+
+          const res = await fetch(this.youtubeUrl);
+          if (!res.ok) throw new Error(`Failed to fetch quiz feedback (HTTP ${res.status})`);
+
+          const data = await res.json();
+          const rawComments = Object.values(data).flat();  // ✅ Fix here
+
+          if (!Array.isArray(rawComments)) {
+            throw new Error('Expected an array of comments from the quiz feedback API');
+          }
+
+          const comments = rawComments.map(c => ({
+            text: c.comment,
+            timestamp: c.timestamp || new Date().toISOString(),
+            authorId: `${c.user_id || 'Unknown'} ${c.username || ''}`.trim()
+          }));
+
+          const analysisRes = await fetch(`${this.apiUrl}/analyze_comments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ comments })
+          });
+
+          if (!analysisRes.ok) throw new Error(`Failed to analyze feedback (HTTP ${analysisRes.status})`);
+
+          this.analysisData = await analysisRes.json();
+          this.videoTitle = 'Quiz Feedback Analysis';
+
+        } else {
+          const videoId = this.extractVideoId(this.youtubeUrl);
+
+          if (!videoId) {
+            this.error = 'Invalid YouTube URL';
+            this.demoMode = true;
+            await this.loadDemoData();
+            return;
+          }
+
+          this.loadingMessage = 'Analyzing YouTube video...';
+          await this.analyzeVideo(videoId);
+        }
+      } catch (e) {
+        console.error(e);
+        this.error = 'Failed to analyze video or feedback';
+      } finally {
+        this.loading = false;
       }
-      await this.analyzeVideo(videoId);
-    },
+    }
+    ,
 
     async loadDemoData() {
       this.loading = true;
@@ -167,7 +213,7 @@ export default {
         while (comments.length < 500) {
           const response = await fetch(`https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=100&pageToken=${pageToken}&key=${API_KEY}`);
           const data = await response.json();
-          
+
           if (data.items) {
             data.items.forEach(item => {
               const snippet = item.snippet.topLevelComment.snippet;
@@ -193,8 +239,8 @@ export default {
       this.loadingMessage = 'Analyzing video...';
       try {
         const videoInfoRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${API_KEY}`);
-    const videoInfoData = await videoInfoRes.json();
-    this.videoTitle = videoInfoData.items?.[0]?.snippet?.title || '';
+        const videoInfoData = await videoInfoRes.json();
+        this.videoTitle = videoInfoData.items?.[0]?.snippet?.title || '';
         const comments = await this.fetchComments(videoId);
         const res = await fetch(`${this.apiUrl}/analyze_comments`, {
           method: 'POST',
@@ -215,21 +261,26 @@ export default {
 </script>
 
 <style scoped>
-.space-y-6 > * + * {
+.space-y-6>*+* {
   margin-top: 1.5rem;
 }
+
 .flex {
   display: flex;
 }
+
 .items-center {
   align-items: center;
 }
+
 .justify-center {
   justify-content: center;
 }
+
 .gap-2 {
   gap: 0.5rem;
 }
+
 .url-input-section {
   margin-top: 1rem;
   padding: 1.5rem;
@@ -238,6 +289,7 @@ export default {
   align-items: center;
   gap: 1rem;
 }
+
 .url-input {
   width: 100%;
   max-width: 500px;
@@ -246,10 +298,12 @@ export default {
   border-radius: 0.5rem;
   font-size: 1rem;
 }
+
 .button-group {
   display: flex;
   gap: 1rem;
 }
+
 .btn {
   padding: 0.5rem 1.5rem;
   font-weight: 600;
@@ -261,16 +315,68 @@ export default {
   gap: 0.5rem;
   transition: all 0.2s ease;
 }
+
 .btn-launch {
   background: linear-gradient(to right, #4facfe, #00f2fe);
   color: white;
 }
+
 .btn-demo {
   background: linear-gradient(to right, #43e97b, #38f9d7);
   color: white;
 }
+
 .btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.toggle-wrapper {
+  margin: 10px 0;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.toggle-label input[type="checkbox"] {
+  display: none;
+}
+
+.toggle-slider {
+  width: 40px;
+  height: 20px;
+  background: #ccc;
+  border-radius: 15px;
+  margin-right: 10px;
+  position: relative;
+  transition: background 0.3s;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  top: 1px;
+  left: 1px;
+  transition: transform 0.3s;
+}
+
+.toggle-label input[type="checkbox"]:checked+.toggle-slider {
+  background: #4CAF50;
+}
+
+.toggle-label input[type="checkbox"]:checked+.toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.toggle-text {
+  font-size: 14px;
+  color: #555;
 }
 </style>
